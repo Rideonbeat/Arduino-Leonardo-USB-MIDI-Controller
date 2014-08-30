@@ -1,0 +1,178 @@
+
+
+
+/*
+Proyecto de controlador midi con Arduino Leonardo. 
+Basado en el trabajo ARCORE de Rkistner derivado de las librerias originales de Arduino
+para enviar y recibir midi atravez de la propia conexion usb de la placa.
+ARCORE de momento trabaja con Arduino Leonardo, Arduino Micro y Bare Conductive Touch Board las 3 con el microcontrolador atmega32u4.
+Algunos usuarios reportan que ARCORE puede funcionar con otras placas que usan el mismo micro.
+
+***** Correccion 1.1 a la version "Final" 24/8/2014
+
+- Los mensajes del encoder han sido cambiados de 0-127 a 1-127
+para corregir el funcionamiento del encoder en el host, anteriormente funcionaba de manera limitada en algunos hosts.
+
+- En la recepcion de los mensajes midi provenientes del host se ha cambiado el comando "while" por "if"
+para optimizar la respuesta.
+
+"while" se ejecuta cicilacamente mientras cierta condicion ocurre por lo que ralentizaba la respuesta
+de los leds al recibir constantemente mensajes del host.
+con el cambio a if solamente comprueba el mensaje del host y ejecuta la funcion
+sin hacerlo en ciclo.
+
+***** Correccion 1.2
+
+Se ha agregado una funcion para convertir los valores provenientes del host a logaritmicos y usar analogwrite para encender los leds
+
+*/
+
+// Las salidas de CC para los vumetros del host pueden estar en cualquier canal pero sus CC deben ser 10 y 13
+
+//---------------------------primera seccion de declaracion de variables---------------------------------------------------------------------------
+
+// variables para los medidores
+
+ int VUmetA=13;                // Vu metter a
+ int VUmetB=10;                // Vu metter b
+ float logcurve=10;            // variable que ajusta lo pronunciado de la curva.
+ float x;                      // x es un valor flotante necesario para la matematica logaritmica
+ 
+// variables del encoder
+
+ int EncPinA = 0;              // declara los pines digitales 0 y 1 como entradas del encoder
+ int EncPinB = 1;              
+ int PinALast = LOW;           // Lectura anterior del pin a para comparar el estado actual
+ int a = LOW;                  // Variables para leer el encoder
+ int b = LOW;
+ 
+// variables y arreglos para la lectura digital
+
+ int Din[8] = {2, 3, 5, 7, 8, 9, 11, 12};  // arreglo de los pins de entradas digitales
+ int offsetD = 64;                         // offset de la nota
+ int LDin[8];                              // Arreglo para guardar los valores digitales anteriores
+ int DtempRead;                             // variable para la lectura temporal
+ int Chan = 4;                             // asigna el canal general de MIDI
+ 
+ // variables y arreglos para la lectura analoga
+ 
+ int Ain[8] = {A0, A1, A2, A3, A4, A5, A6, A7};   // arreglo de los pins de entradas analogas
+ int offsetA = 17;                                // offset del CC
+ int LAin[8];                                     // Arreglo para guardar los valores analogos anteriores
+ int AtempRead;                                   // variable para la lectura temporal analoga                                   
+ int thresh = 4;                                  // asigna el canal general de MIDI
+
+// ----------------setup propio de arcore para los mensajes midi usb------------------
+
+void CC(byte channel, byte ccnumb, byte value) {
+    MIDIEvent CC = {0x0B, 0xB0 | channel, ccnumb, value};
+    MIDIUSB.write(CC);
+ }  
+ 
+ void NOn(byte channel, byte pitch, byte velocity) {
+    MIDIEvent NOn = {0x09, 0x90 | channel, pitch, velocity};
+    MIDIUSB.write(NOn);
+}
+
+void NOff(byte channel, byte pitch, byte velocity) {
+    MIDIEvent NOff = {0x08, 0x80 | channel, pitch, velocity};
+    MIDIUSB.write(NOff);
+}
+ 
+ //--------------------------------------------------------------------------------------------
+void setup() {
+  
+    // setup encoder
+   pinMode (EncPinA,INPUT);
+   pinMode (EncPinB,INPUT);
+   digitalWrite (EncPinA, HIGH);
+   digitalWrite (EncPinB, HIGH);
+   
+    // setup entradas digitales
+   for (int i=0; i<8; i++)
+    {
+      pinMode (Din[i], INPUT);
+      digitalWrite (Din[i], HIGH);
+    }// end del setup digital
+    
+    // setup lecturas analogas
+
+}
+
+//----------------------------------------------------------------------------------------------
+ 
+void loop() {
+//----------------------------------------------------------------------------------------------
+
+  //lee la entrada de mensajes CC y las dirige a las salidas 10 y 13 en modo digital
+     
+      if(MIDIUSB.available() > 0) {            
+          MIDIEvent e;
+          e = MIDIUSB.read();
+          if(e.type == 0x0B && e.m2 == 10) {  // detecta el CC 10 proveniente del host en cualquier canal
+               x = e.m3;
+               x = (pow((x/127), logcurve)*x);   // funcion para convertir los valores lineales a logaritmicos
+               analogWrite(VUmetB, (x*2));     
+          }
+                 
+          if(e.type == 0x0B && e.m2 == 13) {  // detecta el CC 13 proveniente del host en cualquier canal
+               x = e.m3;
+               x = (pow((x/127), logcurve)*x);   // funcion para convertir los valores lineales a logaritmicos
+               analogWrite(VUmetA, (x*2)); 
+          }
+}
+
+  //------------------------------------------------------------------------------------------- 
+  
+  // lee el encoder  
+ 
+      a = digitalRead(EncPinA);    // lee los valores a y b
+      b = digitalRead(EncPinB);
+   
+          if (a != PinALast) {     // checa si a cambio desde su ultimo estado y si cambio:
+          if(a == b) {             // compara a con b, si es igual:
+               CC(Chan, 16, 127);  // envia el valor de 127 al CC 16 del canal general asignado
+           }    
+           else  {                 // si no es igual:
+               CC(Chan, 16, 1);    // envia el valor de o al CC 16 del canal general asignado
+           }
+       PinALast = a;               // define el ultimo valor de a para comparar en el siguiente ciclo
+}
+
+  //-------------------------------------------------------------------------------------------
+  
+  // Lectura de las entradas digitales (botones)
+  
+   for (int i=0; i<8; i++)
+    {
+      DtempRead = digitalRead(Din[i]);  // hace una lectura temporal y la asigna a la variable temporal   
+      if (DtempRead != LDin[i])  {      // si cambio desde la ultima lectura  
+        if (DtempRead == LOW) {         // y lee estado bajo (LOW):
+          NOn(Chan, i+offsetD, 100);    // envia mensaje NoteOn al canal general con el valor i mas el ofset con valor 100
+        }
+        else {
+          NOff(Chan, i+offsetD, 0);     // envia mensaje NoteOff al canal general con el valor i mas el ofset con valor 0
+        } 
+        LDin[i] = DtempRead;            // asigna el valor actual al arreglo de la ultima lectura para comparar en el ciguiente ciclo
+      }
+    
+    }
+  //--------------------------------------------------------------------------------------------
+  
+   // Lectura de las entradas analogas (pots)
+   
+   for (int i=0; i<8; i++)
+    {
+      AtempRead = analogRead(Ain[i]);             // hace una lectura del valor del pot (i) y la asigna a la variable temporal   
+      
+      if (AtempRead > LAin[i] + thresh || AtempRead < LAin[i] - thresh)  { // si es mayor o menor que su ultima lectura mas o menos 2 unidades  
+                                                   // si y solo si la condicion anterior se presenta
+          CC(Chan, i+offsetA, AtempRead/8);        // envia el mensaje CC al canal (i) mas el ofset con el valor temporal en este ciclo dividido entre 8
+          LAin[i] = AtempRead;                     // asigna el valor de la lectura a la variable correspondiente en el ciclo en curso
+         
+        } 
+      }   
+    
+ //----------------------------------------------------------------------------------------------   
+  
+  }//end void loop
